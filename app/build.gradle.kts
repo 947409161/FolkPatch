@@ -334,8 +334,8 @@ registerDownloadTask(
     version = "0.10.7"
 )
 
-// Jailbreak mode: download KernelPatch ko for every supported kernel KMI and
-// package them into the APK assets so the app can load the matching one.
+// Download KernelPatch LKM binaries for every supported kernel KMI. The same
+// assets serve temporary jailbreak loading and persistent ramdisk injection.
 val jailbreakKmis = listOf(
     "android12-5.10", "android13-5.10", "android13-5.15",
     "android14-5.15", "android14-6.1", "android15-6.6", "android16-6.12",
@@ -412,9 +412,22 @@ tasks.register<Copy>("buildApd") {
     rename("apd", "libapd.so")
 }
 
+tasks.register<Exec>("cargoBuildApinit") {
+    executable("cargo")
+    args("zigbuild", "--target", "aarch64-unknown-linux-musl", "--release")
+    workingDir("${project.rootDir}/apinit")
+}
+
+tasks.register<Copy>("buildApinit") {
+    dependsOn("cargoBuildApinit")
+    from("${project.rootDir}/apinit/target/aarch64-unknown-linux-musl/release/apinit")
+    into("${project.projectDir}/libs/arm64-v8a")
+    rename("apinit", "libapinit.so")
+}
+
 tasks.configureEach {
     if (name == "mergeDebugJniLibFolders" || name == "mergeReleaseJniLibFolders") {
-        dependsOn("buildApd")
+        dependsOn("buildApd", "buildApinit")
     }
     // fpdrop 由 CMake 编译并经 POST_BUILD 拷贝到 src/main/assets，
     // 需在 assets 合并前完成，否则首次构建会缺文件。
@@ -431,7 +444,11 @@ tasks.register<Exec>("cargoClean") {
 
 tasks.register<Delete>("apdClean") {
     dependsOn("cargoClean")
-    delete(file("${project.projectDir}/libs/arm64-v8a/libapd.so"))
+    delete(
+        file("${project.projectDir}/libs/arm64-v8a/libapd.so"),
+        file("${project.projectDir}/libs/arm64-v8a/libapinit.so"),
+        file("${project.rootDir}/apinit/target"),
+    )
 }
 
 tasks.clean {

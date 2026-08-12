@@ -3,7 +3,7 @@
 //! Undefined symbols of the module are resolved against `/proc/kallsyms` and the
 //! module is then loaded via the `init_module(2)` syscall. This is a direct port
 //! of KernelSU's `ksuinit::load_module`, letting a prebuilt `kernelpatch.ko` be
-//! loaded on a stock kernel for jailbreak mode. The manual relocation bypasses
+//! loaded on a stock kernel for LKM and temporary-load modes. The manual relocation bypasses
 //! both the per-symbol modversions (CRC) check and the vermagic check (the kernel
 //! skips the vermagic comparison when the module carries a `__versions` section).
 

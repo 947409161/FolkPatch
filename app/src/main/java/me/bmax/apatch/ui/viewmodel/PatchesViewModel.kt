@@ -46,6 +46,7 @@ import java.util.Date
 import java.util.Locale
 
 import me.bmax.apatch.util.getFileNameFromUri
+import me.bmax.apatch.util.getKmi
 import me.bmax.apatch.util.ModuleBackupUtils
 import me.bmax.apatch.util.SafeUriResolver
 import me.bmax.apatch.ui.screen.selectedKPImg
@@ -60,7 +61,23 @@ class PatchesViewModel : ViewModel() {
         PATCH_AND_INSTALL(R.string.patch_mode_patch_and_install),
         INSTALL_TO_NEXT_SLOT(R.string.patch_mode_install_to_next_slot),
         RESTORE(R.string.patch_mode_restore),
-        UNPATCH(R.string.patch_mode_uninstall_patch)
+        UNPATCH(R.string.patch_mode_uninstall_patch),
+        LKM_PATCH_ONLY(R.string.patch_mode_lkm_bootimg_patch),
+        LKM_PATCH_AND_INSTALL(R.string.patch_mode_lkm_patch_and_install),
+        LKM_INSTALL_TO_NEXT_SLOT(R.string.patch_mode_lkm_install_to_next_slot),
+        LKM_RESTORE(R.string.patch_mode_lkm_restore);
+
+        val isLkm: Boolean
+            get() = name.startsWith("LKM_")
+
+        val isLkmInstall: Boolean
+            get() = this == LKM_PATCH_AND_INSTALL || this == LKM_INSTALL_TO_NEXT_SLOT
+
+        val isLkmPatchOnly: Boolean
+            get() = this == LKM_PATCH_ONLY
+
+        val isLkmRestore: Boolean
+            get() = this == LKM_RESTORE
     }
 
     var bootSlot by mutableStateOf("")
@@ -78,6 +95,9 @@ class PatchesViewModel : ViewModel() {
     var needReboot by mutableStateOf(false)
     var useCustomKPImg by mutableStateOf(false)
     var customKPImgFileName by mutableStateOf("")
+    var lkmReady by mutableStateOf(false)
+    var lkmKmi by mutableStateOf("")
+    var lkmImageReady by mutableStateOf(false)
 
     var error by mutableStateOf("")
     var patchLog by mutableStateOf("")
@@ -98,7 +118,7 @@ class PatchesViewModel : ViewModel() {
         patchDir.deleteRecursively()
         patchDir.mkdirs()
         val execs = listOf(
-            "libkptools.so", "libbusybox.so", "libkpatch.so", "libbootctl.so"
+            "libkptools.so", "libbusybox.so", "libkpatch.so", "libbootctl.so", "libapd.so", "libapinit.so"
         )
         error = ""
 
@@ -243,7 +263,13 @@ class PatchesViewModel : ViewModel() {
     private fun extractAndParseBootimg(mode: PatchMode) {
         var cmdBuilder = "./boot_extract.sh"
 
-        if (mode == PatchMode.INSTALL_TO_NEXT_SLOT) {
+        if (mode == PatchMode.INSTALL_TO_NEXT_SLOT || mode == PatchMode.LKM_INSTALL_TO_NEXT_SLOT) {
+            cmdBuilder += " true"
+        }
+        if (mode.isLkm) {
+            if (mode != PatchMode.LKM_INSTALL_TO_NEXT_SLOT) {
+                cmdBuilder += " false"
+            }
             cmdBuilder += " true"
         }
 
@@ -265,11 +291,67 @@ class PatchesViewModel : ViewModel() {
             Log.i(TAG, "current slot: $bootSlot")
             Log.i(TAG, "current bootimg: $bootDev")
             srcBoot = FileSystemManager.getLocal().getFile(bootDev)
-            parseBootimg(bootDev)
+            if (mode.isLkm) {
+                val kmiImage = result.out.firstOrNull { it.startsWith("KMIIMAGE=") }
+                    ?.removePrefix("KMIIMAGE=")
+                if (kmiImage != null && !detectLkmKmi(kmiImage)) {
+                    lkmImageReady = false
+                    throw IOException("Unable to detect KMI from $kmiImage")
+                }
+                if (mode == PatchMode.LKM_INSTALL_TO_NEXT_SLOT && kmiImage == null) {
+                    lkmImageReady = false
+                    throw IOException("Unable to locate the target slot kernel for KMI detection")
+                }
+                lkmImageReady = true
+            } else {
+                parseBootimg(bootDev)
+            }
         } else {
             error = result.err.joinToString("\n")
         }
         running = false
+    }
+
+    private fun prepareLkmModule() {
+        val kmi = lkmKmi.ifEmpty {
+            kmiFromBanner(kimgInfo.banner) ?: getKmi() ?: throw IOException("Unable to detect kernel KMI")
+        }
+        val module = File(patchDir.path, "kernelpatch.ko")
+        val assetName = "${kmi}_kernelpatch.ko"
+        apApp.assets.open(assetName).use { input ->
+            module.outputStream().use { output -> input.copyTo(output) }
+        }
+        lkmKmi = kmi
+        lkmReady = module.isFile && module.length() > 0L && File(patchDir.path, "apinit").isFile
+        if (!lkmReady) {
+            throw IOException("LKM assets are incomplete for $kmi")
+        }
+    }
+
+    private fun kmiFromBanner(banner: String): String? {
+        return Regex("(.* )?(\\d+\\.\\d+)(\\S+)?(android\\d+)(.*)")
+            .find(banner)
+            ?.let { "${it.groupValues[4]}-${it.groupValues[2]}" }
+    }
+
+    private fun detectLkmKmi(image: String): Boolean {
+        val quotedImage = image.replace("'", "'\\''")
+        val result = shellForResult(
+            getShell(),
+            "cd ${patchDir.path}",
+            "./kptools unpacknolog '$quotedImage'",
+            "./kptools -l -i kernel",
+        )
+        if (!result.isSuccess) return false
+        return runCatching {
+            val ini = Ini(StringReader(result.out.joinToString("\n")))
+            val banner = ini["kernel"]?.get("banner")?.toString().orEmpty()
+            kmiFromBanner(banner)?.let {
+                lkmKmi = it
+                true
+            } ?: false
+        }.onFailure { Log.w(TAG, "Unable to detect LKM KMI from $image", it) }
+            .getOrDefault(false)
     }
 
     fun prepare(mode: PatchMode) {
@@ -281,7 +363,7 @@ class PatchesViewModel : ViewModel() {
             try {
                 prepare()
 
-                if (selectedKPImg != null && mode == PatchMode.PATCH_ONLY) {
+                if (!mode.isLkm && selectedKPImg != null && mode == PatchMode.PATCH_ONLY) {
                     try {
                         val kpimgFile = File(patchDir, "kpimg")
                         selectedKPImg!!.inputStream().buffered().use { src ->
@@ -297,24 +379,37 @@ class PatchesViewModel : ViewModel() {
                     }
                 }
 
-                if (selectedBootImage != null && (mode == PatchMode.PATCH_ONLY || mode == PatchMode.RESTORE)) {
+                if (selectedBootImage != null &&
+                    (mode == PatchMode.PATCH_ONLY || mode == PatchMode.RESTORE || mode.isLkmPatchOnly || mode.isLkmRestore)) {
                     try {
                         selectedBootImage!!.inputStream().buffered().use { src ->
                             srcBoot.also {
                                 src.copyAndCloseOut(it.newOutputStream())
                             }
                         }
-                        parseBootimg(srcBoot.path)
+                        if (mode.isLkm) {
+                            lkmImageReady = true
+                            detectLkmKmi(srcBoot.path)
+                        } else {
+                            parseBootimg(srcBoot.path)
+                        }
                     } catch (e: IOException) {
                         Log.e(TAG, "Copy selected boot image error: $e")
                         error += "Copy selected boot image error: ${e.message}\n"
                     }
                 }
 
-                if (mode != PatchMode.UNPATCH) {
+                // Resolve the target ramdisk first so inactive-slot installs use
+                // the target slot's kernel when selecting the LKM KMI asset.
+                if (mode.isLkmInstall) {
+                    extractAndParseBootimg(mode)
+                }
+                if (mode.isLkm && !mode.isLkmRestore) {
+                    prepareLkmModule()
+                } else if (!mode.isLkm && mode != PatchMode.UNPATCH) {
                     parseKpimg()
                 }
-                if (mode == PatchMode.PATCH_AND_INSTALL || mode == PatchMode.UNPATCH || mode == PatchMode.INSTALL_TO_NEXT_SLOT) {
+                if (!mode.isLkm && (mode == PatchMode.PATCH_AND_INSTALL || mode == PatchMode.UNPATCH || mode == PatchMode.INSTALL_TO_NEXT_SLOT)) {
                     extractAndParseBootimg(mode)
                 }
             } catch (e: Exception) {
@@ -461,10 +556,180 @@ class PatchesViewModel : ViewModel() {
             patching = false
         }
     }
+
+    private fun lkmCommand(vararg args: String): List<String> = listOf("./apd") + args.toList()
+
+    private fun lkmShellCommand(args: List<String>): String = args.joinToString(" ") { arg ->
+        "'${arg.replace("'", "'\\''")}'"
+    }
+
+    private fun doLkmPatchInternal(mode: PatchMode) {
+        val logs = object : CallbackList<String>() {
+            override fun onAddElement(e: String?) {
+                patchLog += e ?: ""
+                patchLog += "\n"
+                Log.i(TAG, e ?: "")
+            }
+        }
+        val module = File(patchDir.path, "kernelpatch.ko")
+        val loader = File(patchDir.path, "apinit")
+        val output = File(patchDir.path, "new-boot.img")
+        val command = lkmCommand(
+            "lkm-patch",
+            "--boot", srcBoot.path,
+            "--module", module.path,
+            "--loader", loader.path,
+            "--out", output.path,
+        )
+        val installDirectly = mode.isLkmInstall
+        val success = if (installDirectly) {
+            getShell().newJob().add(
+                "export ASH_STANDALONE=1",
+                "cd ${patchDir.path}",
+                lkmShellCommand(command),
+                "./busybox sh ./boot_flash.sh '${bootDev.replace("'", "'\\''")}' '${output.path.replace("'", "'\\''")}'",
+            ).to(logs, logs).exec().isSuccess
+        } else {
+            val process = ProcessBuilder(command)
+                .directory(patchDir)
+                .redirectErrorStream(true)
+                .start()
+            BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                reader.forEachLine { line -> logs.add(line) }
+            }
+            process.waitFor() == 0
+        }
+
+        if (!success) {
+            error = " LKM patch failed."
+            logs.add(error)
+            logs.add("****************************")
+            patchdone = true
+            patching = false
+            return
+        }
+
+        if (mode.isLkmPatchOnly) {
+            val apVer = Version.getManagerVersion().second
+            val rand = (1..4).map { ('a'..'z').random() }.joinToString("")
+            val outFilename = "folk_lkm_patched_${apVer}_${lkmKmi}_$rand.img"
+            val outDir = getSafeDownloadsDir(apApp)
+            if (!outDir.exists()) outDir.mkdirs()
+            val outPath = File(outDir, outFilename)
+            val inputUri = output.getUri(apApp)
+            val exported = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val outUri = createDownloadUri(apApp, outFilename)
+                insertDownload(apApp, outUri, inputUri)
+            } else {
+                output.inputStream().copyAndClose(outPath.outputStream())
+                true
+            }
+            if (exported) {
+                logs.add(apApp.getString(R.string.patch_output_written_to))
+                logs.add(" ${outPath.path}")
+            } else {
+                logs.add(apApp.getString(R.string.patch_write_failed))
+            }
+        } else {
+            if (mode == PatchMode.LKM_INSTALL_TO_NEXT_SLOT) {
+                logs.add("- Connecting boot hal...")
+                val bootctlStatus = getShell().newJob().add(
+                    "cd ${patchDir.path}",
+                    "chmod 0777 ${patchDir.path}/bootctl",
+                    "./bootctl hal-info",
+                ).to(logs, logs).exec()
+                if (bootctlStatus.isSuccess) {
+                    val currentSlot = shellForResult(
+                        getShell(), "cd ${patchDir.path}", "./bootctl get-current-slot"
+                    ).out.firstOrNull()?.trim()
+                    val targetSlot = if (currentSlot == "0") 1 else 0
+                    logs.add("- Switching to next slot: $targetSlot...")
+                    getShell().newJob().add(
+                        "cd ${patchDir.path}",
+                        "./bootctl set-active-boot-slot $targetSlot",
+                    ).to(logs, logs).exec()
+                } else {
+                    logs.add("[X] Failed to connect to boot hal, switch slot manually")
+                }
+            }
+            logs.add("- LKM boot image flashed")
+            needReboot = true
+            APApplication.markNeedReboot()
+            clearJailbreakMarker()
+        }
+        logs.add("****************************")
+        patchdone = true
+        patching = false
+    }
+
+    fun doLkmRestore() {
+        viewModelScope.launch(Dispatchers.IO) {
+            patching = true
+            patchLog = ""
+            val logs = object : CallbackList<String>() {
+                override fun onAddElement(e: String?) {
+                    patchLog += e ?: ""
+                    patchLog += "\n"
+                    Log.i(TAG, e ?: "")
+                }
+            }
+            val output = File(patchDir.path, "new-boot.img")
+            val command = lkmCommand(
+                "lkm-restore",
+                "--boot", srcBoot.path,
+                "--out", output.path,
+            )
+            val process = ProcessBuilder(command)
+                .directory(patchDir)
+                .redirectErrorStream(true)
+                .start()
+            BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                reader.forEachLine { line -> logs.add(line) }
+            }
+            if (process.waitFor() != 0) {
+                error = " LKM restore failed."
+                logs.add(error)
+            } else {
+                val outFilename = "folk_lkm_restored_${System.currentTimeMillis()}.img"
+                val outDir = getSafeDownloadsDir(apApp)
+                if (!outDir.exists()) outDir.mkdirs()
+                val outPath = File(outDir, outFilename)
+                val exported = runCatching {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val outUri = createDownloadUri(apApp, outFilename)
+                        insertDownload(apApp, outUri, output.getUri(apApp))
+                    } else {
+                        output.inputStream().copyAndClose(outPath.outputStream())
+                        true
+                    }
+                }.onFailure { Log.e(TAG, "LKM restore export failed", it) }.getOrDefault(false)
+                if (exported) {
+                    logs.add(apApp.getString(R.string.patch_output_written_to))
+                    logs.add(" ${outPath.path}")
+                } else {
+                    logs.add(apApp.getString(R.string.patch_write_failed))
+                }
+            }
+            logs.add("****************************")
+            patchdone = true
+            patching = false
+        }
+    }
+
     fun doPatch(mode: PatchMode, useKey: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
             patching = true
             Log.d(TAG, "starting patching...")
+
+            if (mode.isLkm) {
+                if (mode.isLkmRestore) {
+                    patching = false
+                    doLkmRestore()
+                } else {
+                    doLkmPatchInternal(mode)
+                }
+                return@launch
+            }
 
             val apVer = Version.getManagerVersion().second
             val rand = (1..4).map { ('a'..'z').random() }.joinToString("")

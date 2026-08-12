@@ -175,11 +175,19 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
 
                 PatchMode(mode)
                 ErrorView(viewModel.error)
-                KernelPatchImageView(viewModel.kpimgInfo)
-                CustomKPImgView(viewModel)
+                if (!mode.isLkm) {
+                    KernelPatchImageView(viewModel.kpimgInfo)
+                    CustomKPImgView(viewModel)
+                } else if (viewModel.lkmKmi.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.lkm_kmi, viewModel.lkmKmi),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
 
                 // select boot.img
-                if ((mode == PatchesViewModel.PatchMode.PATCH_ONLY || mode == PatchesViewModel.PatchMode.RESTORE) && viewModel.kimgInfo.banner.isEmpty()) {
+                if ((mode == PatchesViewModel.PatchMode.PATCH_ONLY || mode == PatchesViewModel.PatchMode.RESTORE || mode.isLkmPatchOnly || mode.isLkmRestore) &&
+                    viewModel.kimgInfo.banner.isEmpty() && !(mode.isLkm && viewModel.lkmImageReady)) {
                     SelectFileButton(
                         text = stringResource(id = R.string.patch_select_bootimg_btn),
                         opaque = true,
@@ -198,7 +206,7 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
                     KernelImageView(viewModel.kimgInfo)
                 }
 
-                if (viewModel.useCustomKPImg && !viewModel.patching && !viewModel.patchdone) {
+                if (!mode.isLkm && viewModel.useCustomKPImg && !viewModel.patching && !viewModel.patchdone) {
                     SelectFileButton(
                         text = stringResource(id = R.string.patch_select_kpimg_btn),
                         opaque = true,
@@ -207,7 +215,7 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
                 }
 
                 // existed extras
-                if (mode == PatchesViewModel.PatchMode.PATCH_AND_INSTALL || mode == PatchesViewModel.PatchMode.INSTALL_TO_NEXT_SLOT) {
+                if (!mode.isLkm && (mode == PatchesViewModel.PatchMode.PATCH_AND_INSTALL || mode == PatchesViewModel.PatchMode.INSTALL_TO_NEXT_SLOT)) {
                     viewModel.existedExtras.forEach(action = {
                         ExtraItem(extra = it, true, onDelete = {
                             viewModel.existedExtras.remove(it)
@@ -216,7 +224,7 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
                 }
 
                 // add new extras
-                if (mode != PatchesViewModel.PatchMode.UNPATCH && mode != PatchesViewModel.PatchMode.RESTORE) {
+                if (!mode.isLkm && mode != PatchesViewModel.PatchMode.UNPATCH && mode != PatchesViewModel.PatchMode.RESTORE) {
                     viewModel.newExtras.forEach(action = {
                         ExtraItem(extra = it, false, onDelete = {
                             val idx = viewModel.newExtras.indexOf(it)
@@ -227,7 +235,7 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
                 }
 
                 // add new KPM
-                if (!viewModel.patching && !viewModel.patchdone && mode != PatchesViewModel.PatchMode.UNPATCH && mode != PatchesViewModel.PatchMode.RESTORE) {
+                if (!mode.isLkm && !viewModel.patching && !viewModel.patchdone && mode != PatchesViewModel.PatchMode.UNPATCH && mode != PatchesViewModel.PatchMode.RESTORE) {
                     SelectFileButton(
                         text = stringResource(id = R.string.patch_embed_kpm_btn),
                         opaque = true,
@@ -281,14 +289,19 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
                 Spacer(modifier = Modifier.height(4.dp))
             }
 
+            val imageReady = viewModel.kimgInfo.banner.isNotEmpty()
+            val modeReady = when {
+                mode.isLkmRestore -> viewModel.lkmImageReady
+                mode.isLkm -> viewModel.lkmReady
+                else -> imageReady
+            }
             val canStart = !viewModel.running && !viewModel.patching && !viewModel.patchdone &&
-                viewModel.kimgInfo.banner.isNotEmpty() &&
-                mode != PatchesViewModel.PatchMode.RESTORE
+                modeReady && (mode != PatchesViewModel.PatchMode.RESTORE || mode.isLkmRestore)
             if (canStart) {
-                val actionText = if (mode == PatchesViewModel.PatchMode.UNPATCH) {
-                    stringResource(id = R.string.patch_start_unpatch_btn)
-                } else {
-                    stringResource(id = R.string.patch_start_patch_btn)
+                val actionText = when {
+                    mode == PatchesViewModel.PatchMode.UNPATCH -> stringResource(id = R.string.patch_start_unpatch_btn)
+                    mode.isLkmRestore -> stringResource(id = R.string.patch_start_lkm_restore_btn)
+                    else -> stringResource(id = R.string.patch_start_patch_btn)
                 }
                 StartButton(
                     text = actionText,
@@ -299,6 +312,8 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
                 ) {
                     if (mode == PatchesViewModel.PatchMode.UNPATCH) {
                         viewModel.doUnpatch()
+                    } else if (mode.isLkmRestore) {
+                        viewModel.doLkmRestore()
                     } else {
                         viewModel.doPatch(mode, false)
                     }

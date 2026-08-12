@@ -46,6 +46,8 @@ regex-lite = "0.1.9"
 # for insmod (ELF parsing + symbol relocation, no version check)
 goblin = "0.10"
 scroll = "0.13"
+# Boot image and ramdisk manipulation for KernelSU-style LKM installs.
+android-bootimg = { git = "https://github.com/5ec1cff/android_bootimg", rev = "150425b027c76ea104c82e408571651f2181b2c2" }
 # for magica (jailbreak adb-root escalation)
 adb_client = "3"
 

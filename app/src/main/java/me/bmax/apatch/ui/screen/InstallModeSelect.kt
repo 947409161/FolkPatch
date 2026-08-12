@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -118,9 +119,19 @@ sealed class InstallMethod {
         @param:StringRes override val label: Int = R.string.mode_select_page_select_kpimg,
     ) : InstallMethod()
 
+    data class SelectLkmFile(
+        val uri: Uri? = null,
+        @param:StringRes override val label: Int = R.string.mode_select_page_lkm_select_file,
+    ) : InstallMethod()
+
     data object DirectInstall : InstallMethod() {
         override val label: Int
             get() = R.string.mode_select_page_patch_and_install
+    }
+
+    data object LkmDirectInstall : InstallMethod() {
+        override val label: Int
+            get() = R.string.mode_select_page_lkm_patch_and_install
     }
 
     data object DirectInstallToInactiveSlot : InstallMethod() {
@@ -128,10 +139,20 @@ sealed class InstallMethod {
             get() = R.string.mode_select_page_install_inactive_slot
     }
 
+    data object LkmDirectInstallToInactiveSlot : InstallMethod() {
+        override val label: Int
+            get() = R.string.mode_select_page_lkm_install_inactive_slot
+    }
+
     // Placeholder for Restore functionality
     data class Restore(
         val uri: Uri? = null,
         @param:StringRes override val label: Int = R.string.restore_select_file, // Reuse string or create new one
+    ) : InstallMethod()
+
+    data class LkmRestore(
+        val uri: Uri? = null,
+        @param:StringRes override val label: Int = R.string.mode_select_page_lkm_restore,
     ) : InstallMethod()
 
     abstract val label: Int
@@ -188,6 +209,19 @@ private fun SelectInstallMethod(
         }
     }
 
+    val selectLkmImageLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (it.resultCode == Activity.RESULT_OK) {
+            it.data?.data?.let { uri ->
+                val option = InstallMethod.SelectLkmFile(uri)
+                selectedOption = option
+                onSelected(option)
+                selectedBootImage = option.uri
+            }
+        }
+    }
+
     // Launcher for custom KPimg selection
     val selectKPImgLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -216,9 +250,26 @@ private fun SelectInstallMethod(
         }
     }
 
+    val selectLkmRestoreLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (it.resultCode == Activity.RESULT_OK) {
+            it.data?.data?.let { uri ->
+                val option = InstallMethod.LkmRestore(uri)
+                selectedOption = option
+                onSelected(option)
+                selectedBootImage = option.uri
+            }
+        }
+    }
+
     val confirmDialog = rememberConfirmDialog(onConfirm = {
         selectedOption = InstallMethod.DirectInstallToInactiveSlot
         onSelected(InstallMethod.DirectInstallToInactiveSlot)
+    }, onDismiss = null)
+    val lkmConfirmDialog = rememberConfirmDialog(onConfirm = {
+        selectedOption = InstallMethod.LkmDirectInstallToInactiveSlot
+        onSelected(InstallMethod.LkmDirectInstallToInactiveSlot)
     }, onDismiss = null)
     val dialogTitle = stringResource(id = android.R.string.dialog_alert_title)
     val dialogContent = stringResource(id = R.string.mode_select_page_install_inactive_slot_warning)
@@ -276,7 +327,22 @@ private fun SelectInstallMethod(
                 )
             }
 
+            is InstallMethod.SelectLkmFile -> {
+                selectedBootImage = null
+                selectLkmImageLauncher.launch(
+                    Intent(Intent.ACTION_GET_CONTENT).apply {
+                        type = "application/octet-stream"
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                    }
+                )
+            }
+
             is InstallMethod.DirectInstall -> {
+                selectedOption = option
+                onSelected(option)
+            }
+
+            is InstallMethod.LkmDirectInstall -> {
                 selectedOption = option
                 onSelected(option)
             }
@@ -284,9 +350,22 @@ private fun SelectInstallMethod(
             is InstallMethod.DirectInstallToInactiveSlot -> {
                 confirmDialog.showConfirm(dialogTitle, dialogContent)
             }
+            is InstallMethod.LkmDirectInstallToInactiveSlot -> {
+                lkmConfirmDialog.showConfirm(dialogTitle, dialogContent)
+            }
             is InstallMethod.Restore -> {
                 selectedBootImage = null
                 selectRestoreImageLauncher.launch(
+                    Intent(Intent.ACTION_GET_CONTENT).apply {
+                        type = "application/octet-stream"
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                    }
+                )
+            }
+
+            is InstallMethod.LkmRestore -> {
+                selectedBootImage = null
+                selectLkmRestoreLauncher.launch(
                     Intent(Intent.ACTION_GET_CONTENT).apply {
                         type = "application/octet-stream"
                         addCategory(Intent.CATEGORY_OPENABLE)
@@ -309,15 +388,31 @@ private fun SelectInstallMethod(
                          navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.PATCH_ONLY))
                     }
                 }
+                is InstallMethod.SelectLkmFile -> {
+                    if (selectedBootImage != null) {
+                        navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.LKM_PATCH_ONLY))
+                    }
+                }
                 is InstallMethod.DirectInstall -> {
                     navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.PATCH_AND_INSTALL))
                 }
-                 is InstallMethod.DirectInstallToInactiveSlot -> {
+                is InstallMethod.DirectInstallToInactiveSlot -> {
                      navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.INSTALL_TO_NEXT_SLOT))
+                }
+                is InstallMethod.LkmDirectInstall -> {
+                    navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.LKM_PATCH_AND_INSTALL))
+                }
+                is InstallMethod.LkmDirectInstallToInactiveSlot -> {
+                    navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.LKM_INSTALL_TO_NEXT_SLOT))
                 }
                 is InstallMethod.Restore -> {
                     if (selectedBootImage != null) {
                         navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.RESTORE))
+                    }
+                }
+                is InstallMethod.LkmRestore -> {
+                    if (selectedBootImage != null) {
+                        navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.LKM_RESTORE))
                     }
                 }
             }
@@ -325,7 +420,16 @@ private fun SelectInstallMethod(
     }
 
     var kpExpanded by remember { mutableStateOf(true) }
+    var lkmExpanded by remember { mutableStateOf(false) }
     var restoreExpanded by remember { mutableStateOf(false) }
+
+    val lkmOptions = mutableListOf<InstallMethod>(InstallMethod.SelectLkmFile(), InstallMethod.LkmRestore())
+    if (rootAvailable) {
+        lkmOptions.add(InstallMethod.LkmDirectInstall)
+        if (isAbDevice) {
+            lkmOptions.add(InstallMethod.LkmDirectInstallToInactiveSlot)
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -397,6 +501,50 @@ private fun SelectInstallMethod(
                             )
                         ) {
                             kpOptions.forEach { option ->
+                                InstallMethodOption(
+                                    option = option,
+                                    selectedOption = selectedOption,
+                                    onClick = onClick
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (!jailbreakBlocked) item(key = "lkm_install") {
+                    ListItem(
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        leadingContent = {
+                            Icon(
+                                Icons.Filled.Memory,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        headlineContent = {
+                            Text(
+                                stringResource(R.string.mode_select_page_lkm_title),
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        },
+                        trailingContent = {
+                            Icon(
+                                imageVector = if (lkmExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                contentDescription = null
+                            )
+                        },
+                        modifier = Modifier.clickable { lkmExpanded = !lkmExpanded }
+                    )
+
+                    AnimatedVisibility(
+                        visible = lkmExpanded,
+                        enter = fadeIn() + expandVertically(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
+                        ) {
+                            lkmOptions.forEach { option ->
                                 InstallMethodOption(
                                     option = option,
                                     selectedOption = selectedOption,

@@ -1,4 +1,4 @@
-use crate::{defs, event, insmod, late_load, lua, magica, module, module_config, plugin, supercall, utils};
+use crate::{defs, event, insmod, late_load, lkm, lua, magica, module, module_config, plugin, supercall, utils};
 #[cfg(target_os = "android")]
 use android_logger::Config;
 use anyhow::{Context, Result};
@@ -51,7 +51,7 @@ enum Commands {
     /// Start uid listener for synchronizing root list
     UidListener,
 
-    /// Load a kernel module (.ko) without version check (jailbreak mode)
+    /// Load a kernel module (.ko) without version check (temporary-load mode)
     Insmod {
         /// kernel module path
         module: PathBuf,
@@ -81,6 +81,15 @@ enum Commands {
         #[arg(long)]
         package_name: Option<String>,
     },
+
+    /// Patch a boot image with a KernelPatch LKM and an early init loader.
+    LkmPatch(crate::lkm::PatchArgs),
+
+    /// Remove the KernelPatch LKM and restore the original init from a boot image.
+    LkmRestore(crate::lkm::RestoreArgs),
+
+    /// Check whether a boot image contains an init ramdisk.
+    LkmCheck(crate::lkm::CheckArgs),
 
     /// Resetprop - Magisk-compatible system property tool
     #[command(disable_help_flag = true)]
@@ -320,6 +329,12 @@ pub fn run() -> Result<()> {
             }
             result
         }
+
+        Commands::LkmPatch(args) => lkm::patch(args),
+
+        Commands::LkmRestore(args) => lkm::restore(args),
+
+        Commands::LkmCheck(args) => lkm::check(args),
 
         Commands::Module { command } => {
             #[cfg(any(target_os = "linux", target_os = "android"))]

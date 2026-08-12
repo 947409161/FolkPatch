@@ -26,6 +26,7 @@ private
 app/src/main/assets/Service/
 fpd/target/
 fpd/.cargo/
+apinit/target/
 
 # demo project
 demo

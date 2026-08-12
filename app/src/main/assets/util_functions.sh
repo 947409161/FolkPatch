@@ -251,6 +251,41 @@ find_boot_image() {
   [ -z $BOOTIMAGE ] || echo "BOOTIMAGE=$BOOTIMAGE"
 }
 
+# Locate the ramdisk partition used by KernelSU-style LKM mode. On Android 13+
+# and newer the init ramdisk normally lives in init_boot, while the matching
+# kernel/KMI remains in boot. KMIIMAGE is used only for module selection.
+find_lkm_boot_image() {
+  lkm_has_ramdisk() {
+    [ -z "$1" ] && return 1
+    ./apd lkm-check --boot "$1" >/dev/null 2>&1
+  }
+
+  if [ ! -z "$SLOT" ]; then
+    INIT_BOOT=$(find_block "init_boot$SLOT")
+    BOOT_CANDIDATE=$(find_block "boot$SLOT")
+    VENDOR_BOOT=$(find_block "vendor_boot$SLOT")
+  else
+    INIT_BOOT=$(find_block init_boot)
+    BOOT_CANDIDATE=$(find_block boot)
+    VENDOR_BOOT=$(find_block vendor_boot)
+  fi
+
+  if lkm_has_ramdisk "$INIT_BOOT"; then
+    BOOTIMAGE="$INIT_BOOT"
+  elif lkm_has_ramdisk "$VENDOR_BOOT"; then
+    BOOTIMAGE="$VENDOR_BOOT"
+  elif lkm_has_ramdisk "$BOOT_CANDIDATE"; then
+    BOOTIMAGE="$BOOT_CANDIDATE"
+  fi
+
+  # vendor_boot commonly carries only the ramdisk, so do not use it as the
+  # KMI source when a separate boot partition is unavailable.
+  KMIIMAGE="$BOOT_CANDIDATE"
+
+  [ -z "$BOOTIMAGE" ] || echo "BOOTIMAGE=$BOOTIMAGE"
+  [ -z "$KMIIMAGE" ] || echo "KMIIMAGE=$KMIIMAGE"
+}
+
 flash_image() {
   local CMD1
   case "$1" in
