@@ -455,6 +455,12 @@ pub fn on_manager_boot_completed(superkey: Option<String>) -> Result<()> {
 
     info!("[diag:manager_boot] superkey_present={} key_len_after={}", superkey.is_some(), superkey.as_ref().map(|s| s.len()).unwrap_or(0));
 
+    // Keep this fallback for old LKM images and boots where the early loader
+    // could not reach APD before its timeout.
+    if let Err(e) = crate::sepolicy::apply_magisk_policy_live() {
+        warn!("manager boot fallback: apply Magisk sepolicy failed: {e:#}");
+    }
+
     supercall::apply_sucompat(&superkey);
 
     if Path::new(defs::UTS_SPOOF_BOOT_PENDING).exists() {

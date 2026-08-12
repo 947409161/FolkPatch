@@ -355,6 +355,15 @@ fun execApdBootFallback(vararg args: String, timeoutMs: Long = SHELL_TIMEOUT_MS)
     }
 }
 
+/** Apply the policy required by KernelPatch LKM before creating normal root shells. */
+fun applyMagiskPolicyLive(): Boolean {
+    val result = execApdBootFallback("sepolicy", "--magisk", "--live", timeoutMs = 30_000L)
+    if (!result.success) {
+        Log.w(TAG, "apply Magisk sepolicy failed: ${result.errorMessage ?: result.output}")
+    }
+    return result.success
+}
+
 suspend fun listModules(): String = withContext(Dispatchers.IO) {
     val shell = getRootShell()
     val out = try {

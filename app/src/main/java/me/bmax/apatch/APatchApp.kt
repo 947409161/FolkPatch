@@ -16,6 +16,7 @@ import androidx.lifecycle.MutableLiveData
 import com.topjohnwu.superuser.CallbackList
 import me.bmax.apatch.ui.CrashHandleActivity
 import me.bmax.apatch.util.APatchCli
+import me.bmax.apatch.util.applyMagiskPolicyLive
 import me.bmax.apatch.util.verifyAppSignature
 import me.bmax.apatch.ui.theme.MusicConfig
 import me.bmax.apatch.util.MusicManager
@@ -273,7 +274,19 @@ class APApplication : Application(), Thread.UncaughtExceptionHandler, ImageLoade
                             return@thread
                         }
 
-                        APatchCli.refresh()
+                        // The APK is present before an LKM image can be patched,
+                        // but the userspace daemon may not be installed yet.
+                        // Bootstrap it once KernelPatch grants this process root.
+                        val apdInstalled = runCatching {
+                            rootShellForResult("[ -x $APD_PATH ]").isSuccess
+                        }.getOrDefault(false)
+                        if (apdInstalled) {
+                            applyMagiskPolicyLive()
+                            APatchCli.refresh()
+                        } else {
+                            Log.i(TAG, "APD is missing; bootstrapping APatch userspace")
+                            installApatch()
+                        }
 
                         val buildV = Version.getKpImg()
                         val installedV = Version.installedKPTime()
